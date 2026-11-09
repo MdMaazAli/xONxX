@@ -567,6 +567,20 @@ int main() {
             }
         }
 
+        uint64_t reloadUUID = uiManager.ConsumeReloadRequest();
+        if (reloadUUID != 0) {
+            auto it = uuidToSlotKey.find(reloadUUID);
+            if (it != uuidToSlotKey.end()) {
+                SlotKey key = it->second;
+                if (slots[key.index].alive && slots[key.index].generation == key.generation) {
+                    if (scripts[key.index].Type == ScriptType::LUA) {
+                        luaRunner.ReloadScript(key, scripts[key.index].ScriptPath);
+                        std::cout << "[LUA] Reloaded script for entity: " << coldData[key.index].name << std::endl;
+                    }
+                }
+            }
+        }
+
         // -------------------------------------------------------------------------------------------------------------------    
         // -------------------------------------------------------------------------------------------------------------------
         // -------------------------------------------------------------------------------------------------------------------
