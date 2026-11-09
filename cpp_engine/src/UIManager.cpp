@@ -429,7 +429,10 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
                     }
 
                     ImGui::TextDisabled("Path: %s", script.ScriptPath.c_str());
-
+                    
+                    if (ImGui::Button("Reload Script")) {
+                        m_reloadScriptUUID = activeEntityUUID;
+                    }
                     if (ImGui::Button("Edit Script")) {
                         LaunchScriptInEditor(script.ScriptPath);
                     }
@@ -497,8 +500,8 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
     DrawModeButton("[ INFERENCE ]", EngineState::INFERENCE_MODE, ImVec4(0.2f, 0.6f, 1.0f, 1.0f)); // Neon Blue
     
     ImGui::SameLine(ImGui::GetWindowWidth() - 150); // Push to far right
-    if (ImGui::Button("EMERGENCY STOP")) {
-        glfwSetWindowShouldClose(window, true);
+    if (ImGui::Button("GLOBAL RELOAD")) {
+        // -------------------------------------------------------------------------- > [GLOBAL RELOAD]
     }
     ImGui::End();
 

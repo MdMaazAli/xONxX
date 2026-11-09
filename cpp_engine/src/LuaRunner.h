@@ -17,6 +17,7 @@ class LuaRunner {
             auto it = m_loadedScripts.find(key);
             return (it != m_loadedScripts.end()) ? it->second : "";
         }
+        void ReloadScript(SlotKey key, const std::string& path = "");
     
     private:
         lua_State* L = nullptr;

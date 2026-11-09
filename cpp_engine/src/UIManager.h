@@ -42,6 +42,12 @@ public:
         m_deleteRequestUUID = 0; 
         return uuid; 
     }
+
+    uint64_t ConsumeReloadRequest( ){
+        uint64_t uuid = m_reloadScriptUUID;
+        m_reloadScriptUUID = 0;
+        return uuid;
+    }
     
     // --- [NEW] Drag & Drop Event Outputs for main.cpp ---
     bool HasNewDrop() const { return m_hasNewDrop; }
@@ -71,6 +77,9 @@ private:
 
     uint64_t m_newlySelectedHierarchyUUID = 0;
     uint64_t m_deleteRequestUUID = 0;
+
+    //< ---------- [RELOAD] ---------- >
+    uint64_t m_reloadScriptUUID = 0;
     
     // Drop State
     bool m_hasNewDrop = false;

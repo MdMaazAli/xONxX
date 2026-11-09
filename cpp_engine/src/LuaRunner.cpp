@@ -136,3 +136,10 @@ void LuaRunner::Tick(SlotKey key, TransformComponent& transform, PhysicsComponen
 
     lua_pop(L, 1);
 }
+
+void LuaRunner::ReloadScript(SlotKey key, const std::string& path) {
+    std::string targetPath = path.empty() ? GetScriptPath(key) : path;
+    if (!targetPath.empty()) {
+        LoadScript(key, targetPath);
+    }
+}
