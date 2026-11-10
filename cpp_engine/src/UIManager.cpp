@@ -111,23 +111,25 @@ void SetScript(ScriptComponent& script, std::string path) {
     std::filesystem::path p(path);
     std::string ext = p.extension().string();
 
-    if (ext == ".py") script.Type = ScriptType::PYTHON;
-    else if (ext == ".cpp") script.Type = ScriptType::CPP;
-    else if (ext == ".lua") script.Type = ScriptType::LUA;
-    else script.Type = ScriptType::NONE;
+    ScriptInstance inst;
+    if (ext == ".py") inst.Type = ScriptType::PYTHON;
+    else if (ext == ".cpp") inst.Type = ScriptType::CPP;
+    else if (ext == ".lua") inst.Type = ScriptType::LUA;
+    else inst.Type = ScriptType::NONE;
 
-    script.ScriptPath = path;
-    script.ScriptName = p.filename().string();
-    script.Is = Script::ENABLED;
+    inst.ScriptPath = path;
+    inst.ScriptName = p.filename().string();
+    inst.Is = Script::ENABLED;
+
+    script.Instances.push_back(inst);
 
     std::cout<<"[ATTACHED] SCRIPT AT PATH : "<<path<<std::endl;
 }
 
-void RemoveScript(ScriptComponent& script) {
-    script.Type = ScriptType::NONE;
-    script.ScriptPath = "";
-    script.ScriptName = "None";
-    script.Is = Script::DISABLED;
+void RemoveScript(ScriptComponent& script, size_t index = 0) {
+    if (index < script.Instances.size()) {
+        script.Instances.erase(script.Instances.begin() + index);
+    }
 }
 
 UIManager::UIManager() : m_firstFrame(true), m_metalTexture(0), m_state(EngineState::EDIT_MODE) {}
@@ -266,17 +268,15 @@ void UIManager::SetupDockingLayout() {
     ImGui::DockBuilderFinish(dockspace_id);
 }
 
-void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<TransformComponent>& transforms, std::vector<PhysicsComponent>& physics, std::vector<AgentComponent>& agents, std::vector<ScriptComponent>& scripts, std::vector<EntityMetadata>& coldData, const std::vector<Slot>& slots, float framerate, bool& cursorInViewport, const glm::mat4& view, const glm::mat4& projection, uint64_t activeEntityUUID) 
+void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<TransformComponent>& transforms, std::vector<PhysicsComponent>& physics, std::vector<AgentComponent>& agents, std::vector<ScriptComponent>& scripts, std::vector<EntityMetadata>& coldData, const std::vector<Slot>& slots, const std::unordered_map<uint64_t, SlotKey>& uuidToSlotKey, float framerate, bool& cursorInViewport, const glm::mat4& view, const glm::mat4& projection, uint64_t activeEntityUUID) 
 {
     ImGuizmo::BeginFrame();
 
     int activeEntityID = -1;
     if (activeEntityUUID != 0) {
-        for (size_t i = 0; i < coldData.size(); ++i) {
-            if (slots[i].alive && coldData[i].uuid == activeEntityUUID) {
-                activeEntityID = static_cast<int>(i);
-                break;
-            }
+        auto it = uuidToSlotKey.find(activeEntityUUID);
+        if (it != uuidToSlotKey.end() && slots[it->second.index].alive && slots[it->second.index].generation == it->second.generation) {
+            activeEntityID = static_cast<int>(it->second.index);
         }
     }
 
@@ -401,44 +401,53 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
         // < ------------------- SCRIPT ------------------- >
         if (scripts.size() > (size_t)activeEntityID) {
             auto& script = scripts[activeEntityID];
-            bool hasScript = (script.Type != ScriptType::NONE);
+            bool hasScript = !script.Instances.empty();
 
             if (ImGui::CollapsingHeader("Script Component", ImGuiTreeNodeFlags_DefaultOpen)) {
                 if (hasScript) {
-                    const char* langStr = "";
-                    if (script.Type == ScriptType::CPP) {
-                        langStr = "[C++]";
-                    }
-                    else if (script.Type == ScriptType::LUA) {
-                        langStr = "[LUA]";
-                    }
-                    else {
-                        langStr = "[PYTHON]";
-                    }
-                    ImVec4 langColor = (script.Type == ScriptType::PYTHON) 
-                        ? ImVec4(0.2f, 0.8f, 1.0f, 1.0f) 
-                        : ImVec4(1.0f, 0.6f, 0.2f, 1.0f);
+                    for (size_t s = 0; s < script.Instances.size(); ++s) {
+                        auto& inst = script.Instances[s];
+                        ImGui::PushID((int)s);
 
-                    ImGui::TextColored(langColor, "%s", langStr);
-                    ImGui::SameLine();
-                    ImGui::Text("%s", script.ScriptName.c_str());
+                        const char* langStr = "";
+                        if (inst.Type == ScriptType::CPP) {
+                            langStr = "[C++]";
+                        }
+                        else if (inst.Type == ScriptType::LUA) {
+                            langStr = "[LUA]";
+                        }
+                        else {
+                            langStr = "[PYTHON]";
+                        }
+                        ImVec4 langColor = (inst.Type == ScriptType::PYTHON) 
+                            ? ImVec4(0.2f, 0.8f, 1.0f, 1.0f) 
+                            : ImVec4(1.0f, 0.6f, 0.2f, 1.0f);
 
-                    bool isEnabled = (script.Is == Script::ENABLED);
-                    if (ImGui::Checkbox("Enabled", &isEnabled)) {
-                        script.Is = isEnabled ? Script::ENABLED : Script::DISABLED;
-                    }
+                        ImGui::TextColored(langColor, "%s", langStr);
+                        ImGui::SameLine();
+                        ImGui::Text("%s", inst.ScriptName.c_str());
 
-                    ImGui::TextDisabled("Path: %s", script.ScriptPath.c_str());
-                    
-                    if (ImGui::Button("Reload Script")) {
-                        m_reloadScriptUUID = activeEntityUUID;
-                    }
-                    if (ImGui::Button("Edit Script")) {
-                        LaunchScriptInEditor(script.ScriptPath);
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Remove Script")) {
-                        RemoveScript(script);
+                        bool isEnabled = (inst.Is == Script::ENABLED);
+                        if (ImGui::Checkbox("Enabled", &isEnabled)) {
+                            inst.Is = isEnabled ? Script::ENABLED : Script::DISABLED;
+                        }
+
+                        ImGui::TextDisabled("Path: %s", inst.ScriptPath.c_str());
+                        
+                        if (ImGui::Button("Reload Script")) {
+                            m_reloadScriptUUID = activeEntityUUID;
+                        }
+                        if (ImGui::Button("Edit Script")) {
+                            LaunchScriptInEditor(inst.ScriptPath);
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("Remove Script")) {
+                            RemoveScript(script, s);
+                            ImGui::PopID();
+                            break;
+                        }
+                        ImGui::Separator();
+                        ImGui::PopID();
                     }
                 } else {
                     ImGui::TextDisabled("No script attached.");
@@ -501,7 +510,7 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
     
     ImGui::SameLine(ImGui::GetWindowWidth() - 150); // Push to far right
     if (ImGui::Button("GLOBAL RELOAD")) {
-        // -------------------------------------------------------------------------- > [GLOBAL RELOAD]
+        m_globalReloadRequest = true;
     }
     ImGui::End();
 
@@ -545,12 +554,20 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
         
         char label[128];
         bool hasBrain = (agents.size() > i && agents[i].AgentModule != "None");
-        bool hasScript = (scripts.size() > i && scripts[i].Type != ScriptType::NONE);
+        bool hasScript = (scripts.size() > i && !scripts[i].Instances.empty());
 
         if (hasBrain && hasScript) {
-            snprintf(label, sizeof(label), "[%zu] %s (%s | %s)", i, coldData[i].name.c_str(), agents[i].AgentModule.c_str(), scripts[i].ScriptName.c_str());
+            if (scripts[i].Instances.size() == 1) {
+                snprintf(label, sizeof(label), "[%zu] %s (%s | %s)", i, coldData[i].name.c_str(), agents[i].AgentModule.c_str(), scripts[i].Instances[0].ScriptName.c_str());
+            } else {
+                snprintf(label, sizeof(label), "[%zu] %s (%s | %zu Scripts)", i, coldData[i].name.c_str(), agents[i].AgentModule.c_str(), scripts[i].Instances.size());
+            }
         } else if (hasScript) {
-            snprintf(label, sizeof(label), "[%zu] %s (Script: %s)", i, coldData[i].name.c_str(), scripts[i].ScriptName.c_str());
+            if (scripts[i].Instances.size() == 1) {
+                snprintf(label, sizeof(label), "[%zu] %s (Script: %s)", i, coldData[i].name.c_str(), scripts[i].Instances[0].ScriptName.c_str());
+            } else {
+                snprintf(label, sizeof(label), "[%zu] %s (%zu Scripts)", i, coldData[i].name.c_str(), scripts[i].Instances.size());
+            }
         } else if (hasBrain) {
             snprintf(label, sizeof(label), "[%zu] %s (Brain: %s)", i, coldData[i].name.c_str(), agents[i].AgentModule.c_str());
         } else {
@@ -613,21 +630,28 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
                     }
                 }
             }
-            if (scripts.size() > i && scripts[i].Type != ScriptType::NONE) {
+            if (scripts.size() > i && !scripts[i].Instances.empty()) {
                 auto& script = scripts[i];
-                ImGui::Separator();
-                ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "Script: %s", script.ScriptName.c_str());
+                for (size_t s = 0; s < script.Instances.size(); ++s) {
+                    auto& inst = script.Instances[s];
+                    ImGui::PushID((int)s);
+                    ImGui::Separator();
+                    ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "Script: %s", inst.ScriptName.c_str());
 
-                bool isEnabled = (script.Is == Script::ENABLED);
-                if (ImGui::Checkbox("Enabled", &isEnabled)) {
-                    script.Is = isEnabled ? Script::ENABLED : Script::DISABLED;
-                }
+                    bool isEnabled = (inst.Is == Script::ENABLED);
+                    if (ImGui::Checkbox("Enabled", &isEnabled)) {
+                        inst.Is = isEnabled ? Script::ENABLED : Script::DISABLED;
+                    }
 
-                if (ImGui::MenuItem("Edit Script")) {
-                    LaunchScriptInEditor(script.ScriptPath);
-                }
-                if (ImGui::MenuItem("Remove Script")) {
-                    RemoveScript(script);
+                    if (ImGui::MenuItem("Edit Script")) {
+                        LaunchScriptInEditor(inst.ScriptPath);
+                    }
+                    if (ImGui::MenuItem("Remove Script")) {
+                        RemoveScript(script, s);
+                        ImGui::PopID();
+                        break;
+                    }
+                    ImGui::PopID();
                 }
             }
             ImGui::Separator();
@@ -953,11 +977,9 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
 
     int activePopupID = -1;
     if (activePopupUUID != 0) {
-        for (size_t i = 0; i < coldData.size(); ++i) {
-            if (slots[i].alive && coldData[i].uuid == activePopupUUID) {
-                activePopupID = static_cast<int>(i);
-                break;
-            }
+        auto it = uuidToSlotKey.find(activePopupUUID);
+        if (it != uuidToSlotKey.end() && slots[it->second.index].alive && slots[it->second.index].generation == it->second.generation) {
+            activePopupID = static_cast<int>(it->second.index);
         }
     }
     
@@ -1015,21 +1037,28 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
                     RemoveAgentBrain(agent);
                 }
             }
-            if (activePopupID != -1 && (size_t)activePopupID < scripts.size() && scripts[activePopupID].Type != ScriptType::NONE) {
+            if (activePopupID != -1 && (size_t)activePopupID < scripts.size() && !scripts[activePopupID].Instances.empty()) {
                 auto& script = scripts[activePopupID];
-                ImGui::Separator();
-                ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "Script: %s", script.ScriptName.c_str());
+                for (size_t s = 0; s < script.Instances.size(); ++s) {
+                    auto& inst = script.Instances[s];
+                    ImGui::PushID((int)s);
+                    ImGui::Separator();
+                    ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "Script: %s", inst.ScriptName.c_str());
 
-                bool isEnabled = (script.Is == Script::ENABLED);
-                if (ImGui::Checkbox("Enabled", &isEnabled)) {
-                    script.Is = isEnabled ? Script::ENABLED : Script::DISABLED;
-                }
+                    bool isEnabled = (inst.Is == Script::ENABLED);
+                    if (ImGui::Checkbox("Enabled", &isEnabled)) {
+                        inst.Is = isEnabled ? Script::ENABLED : Script::DISABLED;
+                    }
 
-                if (ImGui::MenuItem("Edit Script")) {
-                    LaunchScriptInEditor(script.ScriptPath);
-                }
-                if (ImGui::MenuItem("Remove Script")) {
-                    RemoveScript(script);
+                    if (ImGui::MenuItem("Edit Script")) {
+                        LaunchScriptInEditor(inst.ScriptPath);
+                    }
+                    if (ImGui::MenuItem("Remove Script")) {
+                        RemoveScript(script, s);
+                        ImGui::PopID();
+                        break;
+                    }
+                    ImGui::PopID();
                 }
             }
         }

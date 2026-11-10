@@ -87,11 +87,17 @@ struct PhysicsComponent{
     float Mass;
 };
 
-struct ScriptComponent{
+struct ScriptInstance{
     ScriptType Type = ScriptType::NONE;
     std::string ScriptPath = "";
     std::string ScriptName = "None";
     Script Is = Script::ENABLED;
+};
+
+struct ScriptComponent{
+    std::vector<ScriptInstance> Instances;
+    bool empty() const { return Instances.empty(); }
+    size_t Size() const { return Instances.size(); }
 };
 
 // Physics System class which handle most of the physics related stuff

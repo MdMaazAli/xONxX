@@ -9,18 +9,20 @@ class LuaRunner {
     public:
         void init();
         void shutdown();
-        void LoadScript(SlotKey key, std::string path);
-        void UnloadScript(SlotKey key);
-        void Tick(SlotKey key, TransformComponent& transfom, PhysicsComponent& physcis, float dt);
-        bool IsLoaded(SlotKey key) const { return m_loadedScripts.find(key) != m_loadedScripts.end(); }
-        std::string GetScriptPath(SlotKey key) const {
-            auto it = m_loadedScripts.find(key);
-            return (it != m_loadedScripts.end()) ? it->second : "";
+        void LoadScript(SlotKey key, const std::string& path);
+        void UnloadScript(SlotKey key, const std::string& path);
+        void UnloadAllScripts(SlotKey key);
+        void Tick(SlotKey key,const std::string& path, TransformComponent& transfom, PhysicsComponent& physcis, float dt);
+
+        bool IsLoaded(SlotKey key, const std::string& path) const { 
+            auto it = m_scriptEnvs.find(key);
+            if (it == m_scriptEnvs.end()) return false;
+            return it->second.find(path) != it->second.end();
         }
+
         void ReloadScript(SlotKey key, const std::string& path = "");
     
     private:
         lua_State* L = nullptr;
-        std::unordered_map<SlotKey, std::string> m_loadedScripts;
-        std::unordered_map<SlotKey, int> m_scriptEnvs;
+        std::unordered_map<SlotKey, std::unordered_map<std::string, int>> m_scriptEnvs;
 };
