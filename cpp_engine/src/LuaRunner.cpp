@@ -14,8 +14,8 @@ void LuaRunner::shutdown(){
     }
 }
 
-void LuaRunner::LoadScript(SlotKey key, std::string path){
-    UnloadScript(key);
+void LuaRunner::LoadScript(SlotKey key, const std::string& path){
+    UnloadScript(key, path);
 
     std::string resolvedPath = path;
     if (!std::filesystem::exists(resolvedPath)) {
@@ -55,8 +55,7 @@ void LuaRunner::LoadScript(SlotKey key, std::string path){
         return;
     }
 
-    m_loadedScripts[key] = path;
-    m_scriptEnvs[key] = envRef;
+    m_scriptEnvs[key][path] = envRef;
     
     // all the functions defined in a lua script now are in lua's global namespaces table now we call it in lua's internal stack
     // it communicates with cpp via this internal stack
@@ -74,20 +73,38 @@ void LuaRunner::LoadScript(SlotKey key, std::string path){
     lua_pop(L, 1);
 }
 
-void LuaRunner::UnloadScript(SlotKey key){
+void LuaRunner::UnloadScript(SlotKey key, const std::string& path){
     auto it = m_scriptEnvs.find(key);
     if (it != m_scriptEnvs.end()) {
-        luaL_unref(L, LUA_REGISTRYINDEX, it->second); 
-        m_scriptEnvs.erase(it);
+        auto innerIt = it->second.find(path);
+        if (innerIt != it->second.end()) {
+            luaL_unref(L, LUA_REGISTRYINDEX, innerIt->second); 
+            it->second.erase(innerIt);
+        }
+        if (it->second.empty()) {
+            m_scriptEnvs.erase(it);
+        }
     }
-    m_loadedScripts.erase(key);
 }
 
-void LuaRunner::Tick(SlotKey key, TransformComponent& transform, PhysicsComponent& physcis, float dt) {
+void LuaRunner::UnloadAllScripts(SlotKey key) {
+    auto it = m_scriptEnvs.find(key);
+    if (it != m_scriptEnvs.end()) {
+        for (auto& [path, envRef] : it->second) {
+            luaL_unref(L, LUA_REGISTRYINDEX, envRef);
+        }
+        m_scriptEnvs.erase(it);
+    }
+}
+
+void LuaRunner::Tick(SlotKey key,const std::string& path, TransformComponent& transform, PhysicsComponent& physcis, float dt) {
     auto it = m_scriptEnvs.find(key);
     if (it == m_scriptEnvs.end()) return;
+
+    auto innerIt = it->second.find(path);
+    if (innerIt == it->second.end()) return;
     
-    lua_rawgeti(L, LUA_REGISTRYINDEX, it->second); // Push env table
+    lua_rawgeti(L, LUA_REGISTRYINDEX, innerIt->second); // Push env table
     lua_getfield(L, -1, "update");                 // Push env.update
     lua_remove(L, -2);
     
@@ -138,8 +155,5 @@ void LuaRunner::Tick(SlotKey key, TransformComponent& transform, PhysicsComponen
 }
 
 void LuaRunner::ReloadScript(SlotKey key, const std::string& path) {
-    std::string targetPath = path.empty() ? GetScriptPath(key) : path;
-    if (!targetPath.empty()) {
-        LoadScript(key, targetPath);
-    }
+    LoadScript(key, path);
 }

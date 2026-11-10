@@ -303,7 +303,7 @@ int main() {
         { Entity::ACTIVE, glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(1.0f, 1.0f, 1.0f) },
         { Rigidbody::NO, glm::vec3(0.0f, 0.0f, 0.0f), 1.0f },
         { AgentMode::NONE, "None" },
-        { ScriptType::LUA, "", "", Script::DISABLED }
+        { }
     );
 
     // < ------------------- SNAPSHOT ------------------- >
@@ -433,13 +433,17 @@ int main() {
             for (size_t i = 0; i < transforms.size(); ++i) {
                 if (!slots[i].alive) continue;
                 SlotKey key = { (uint32_t)i, slots[i].generation };
-                if (scripts[i].Type == ScriptType::LUA && scripts[i].Is == Script::ENABLED && !scripts[i].ScriptPath.empty()) {
-                    if (!luaRunner.IsLoaded(key) || luaRunner.GetScriptPath(key) != scripts[i].ScriptPath) {
-                        luaRunner.LoadScript(key, scripts[i].ScriptPath);
+
+                for (size_t j = 0; j < scripts[i].Instances.size(); j++) {
+                    auto inst = scripts[i].Instances[j];
+                    if (inst.Type == ScriptType::LUA && inst.Is == Script::ENABLED && !inst.ScriptPath.empty()) {
+                        if (!luaRunner.IsLoaded(key, inst.ScriptPath)) {
+                            luaRunner.LoadScript(key, inst.ScriptPath);
+                        }
+                        luaRunner.Tick(key,inst.ScriptPath, transforms[i], physics[i], dt);
+                    } else if (luaRunner.IsLoaded(key, inst.ScriptPath)) {
+                        luaRunner.UnloadScript(key, inst.ScriptPath);
                     }
-                    luaRunner.Tick(key, transforms[i], physics[i], dt);
-                } else if (luaRunner.IsLoaded(key)) {
-                    luaRunner.UnloadScript(key);
                 }
             }
             
@@ -477,22 +481,22 @@ int main() {
             if(!slots[i].alive) continue;
             if(meshes[i].Mesh==MeshType::SPHERE){
                 glm::mat4 sphrModel = glm::mat4(1.0f);
-                sphrModel = glm::scale(sphrModel, transforms[i].Size);
                 sphrModel = glm::translate(sphrModel,transforms[i].Position);
+                sphrModel = glm::scale(sphrModel, transforms[i].Size);
                 initModel(sphereShader,sphrModel,view,projection,lightColor,lightPos);
                 sphrMesh.draw();
             }
             else if(meshes[i].Mesh==MeshType::CUBE){
                 glm::mat4 cubeModel = glm::mat4(1.0f);
-                cubeModel = glm::scale(cubeModel, transforms[i].Size);
                 cubeModel = glm::translate(cubeModel,transforms[i].Position);
+                cubeModel = glm::scale(cubeModel, transforms[i].Size);
                 initModel(sphereShader,cubeModel,view,projection,lightColor,lightPos);
                 cubeMesh.draw();
             }
             else if(meshes[i].Mesh==MeshType::PYRAMID){
                 glm::mat4 pyramidModel = glm::mat4(1.0f);
-                pyramidModel = glm::scale(pyramidModel, transforms[i].Size);
                 pyramidModel = glm::translate(pyramidModel,transforms[i].Position);
+                pyramidModel = glm::scale(pyramidModel, transforms[i].Size);
                 initModel(sphereShader,pyramidModel,view,projection,lightColor,lightPos);   
                 pyramidMesh.draw();
             }
@@ -521,7 +525,7 @@ int main() {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
         
-        uiManager.Render(window, fbo.textureId, transforms, physics, agents, scripts, coldData, slots, io.Framerate, cursorInViewport, view, projection, selectedUUID);
+        uiManager.Render(window, fbo.textureId, transforms, physics, agents, scripts, coldData, slots, uuidToSlotKey, io.Framerate, cursorInViewport, view, projection, selectedUUID);
         ImGui::Render();
 
         // -------------------------------------------------------------------------------------------------------------------    
@@ -556,7 +560,7 @@ int main() {
             if (it != uuidToSlotKey.end()) {
                 SlotKey key = it->second;
                 if (slots[key.index].alive && slots[key.index].generation == key.generation) {
-                    luaRunner.UnloadScript(key);
+                    luaRunner.UnloadAllScripts(key);
                     FreeEntity(key.index);
                     if (selectedUUID == deleteUUID) {
                         selectedUUID = 0;
@@ -573,12 +577,27 @@ int main() {
             if (it != uuidToSlotKey.end()) {
                 SlotKey key = it->second;
                 if (slots[key.index].alive && slots[key.index].generation == key.generation) {
-                    if (scripts[key.index].Type == ScriptType::LUA) {
-                        luaRunner.ReloadScript(key, scripts[key.index].ScriptPath);
-                        std::cout << "[LUA] Reloaded script for entity: " << coldData[key.index].name << std::endl;
+                    for (auto inst: scripts[key.index].Instances) {
+                        if (inst.Type == ScriptType::LUA) {
+                            luaRunner.ReloadScript(key, inst.ScriptPath);
+                            std::cout << "[LUA] Reloaded script for entity: " << coldData[key.index].name << std::endl;
+                        }
                     }
                 }
             }
+        }
+
+        if (uiManager.ConsumeGlobalReloadRequest()) {
+            for (size_t i = 0; i < transforms.size(); ++i) {
+                if (!slots[i].alive) continue;
+                for (auto inst: scripts[i].Instances) {
+                    if (inst.Type == ScriptType::LUA && inst.Is == Script::ENABLED && !inst.ScriptPath.empty()) {
+                        SlotKey key = { (uint32_t)i, slots[i].generation };
+                        luaRunner.ReloadScript(key, inst.ScriptPath);
+                    }
+                }
+            }
+            std::cout << "[LUA] Global script reload completed!" << std::endl;
         }
 
         // -------------------------------------------------------------------------------------------------------------------    
@@ -710,7 +729,7 @@ int main() {
                     { Entity::INACTIVE, spawnPoint, glm::vec3(1.0f, 1.0f, 1.0f) },
                     { Rigidbody::NO, glm::vec3(0.0f, 0.0f, 0.0f), 1.0f },
                     { AgentMode::NONE, "None" },
-                    { ScriptType::NONE, "", "None", Script::ENABLED }
+                    { }
                 );
 
                 std::cout << "[SPAWN] New Entity created at X:" << spawnPoint.x << " Z:" << spawnPoint.z << std::endl;

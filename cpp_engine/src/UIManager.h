@@ -4,6 +4,7 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <vector>
+#include <unordered_map>
 #include "Physics.h"
 #include "FileManager.h"
 
@@ -23,6 +24,7 @@ public:
                 std::vector<ScriptComponent>& scripts,
                 std::vector<EntityMetadata>& coldData,
                 const std::vector<Slot>& slots,
+                const std::unordered_map<uint64_t, SlotKey>& uuidToSlotKey,
                 float framerate,
                 bool& cursorInViewport,
                 const glm::mat4& view,
@@ -43,10 +45,16 @@ public:
         return uuid; 
     }
 
-    uint64_t ConsumeReloadRequest( ){
+    uint64_t ConsumeReloadRequest(){
         uint64_t uuid = m_reloadScriptUUID;
         m_reloadScriptUUID = 0;
         return uuid;
+    }
+
+    bool ConsumeGlobalReloadRequest(){
+        bool req = m_globalReloadRequest;
+        m_globalReloadRequest = false;
+        return req;
     }
     
     // --- [NEW] Drag & Drop Event Outputs for main.cpp ---
@@ -80,6 +88,7 @@ private:
 
     //< ---------- [RELOAD] ---------- >
     uint64_t m_reloadScriptUUID = 0;
+    bool m_globalReloadRequest = false;
     
     // Drop State
     bool m_hasNewDrop = false;
