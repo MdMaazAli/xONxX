@@ -5,6 +5,7 @@
 #include <chrono>
 #include <random>
 #include <vector>
+#include <unordered_set>
 #include <windows.h>
 #include <dbghelp.h>
 #include <csignal>
@@ -31,6 +32,7 @@
 #include "Collision.h"
 
 #include "LuaRunner.h"
+#include "FileWatcher.h"
 
 #pragma comment(lib, "dbghelp.lib")
 
@@ -337,6 +339,11 @@ int main() {
 
     LuaRunner luaRunner;
     luaRunner.init();
+
+    std::string watchDir = std::filesystem::exists("directory") ? "directory" : "cpp_engine/directory";
+    FileWatcher fileWatcher;
+    fileWatcher.Start(watchDir);
+    std::cout << "[WATCHER] Watching directory: " << watchDir << std::endl;
     
     float accTime = 0.0f,dt = 1.0/60.0f;
     
@@ -428,31 +435,29 @@ int main() {
         // -------------------------------------------------------------------------------------------------------------------
         // -------------------------------------------------------------------------------------------------------------------
 
-        if (currState != EngineState::EDIT_MODE) {
-            // ----------------------------------------------------------------------------------- > BUGS NEED TO FIX
-            for (size_t i = 0; i < transforms.size(); ++i) {
-                if (!slots[i].alive) continue;
-                SlotKey key = { (uint32_t)i, slots[i].generation };
-
-                for (size_t j = 0; j < scripts[i].Instances.size(); j++) {
-                    auto inst = scripts[i].Instances[j];
-                    if (inst.Type == ScriptType::LUA && inst.Is == Script::ENABLED && !inst.ScriptPath.empty()) {
-                        if (!luaRunner.IsLoaded(key, inst.ScriptPath)) {
-                            luaRunner.LoadScript(key, inst.ScriptPath);
-                        }
-                        luaRunner.Tick(key,inst.ScriptPath, transforms[i], physics[i], dt);
-                    } else if (luaRunner.IsLoaded(key, inst.ScriptPath)) {
-                        luaRunner.UnloadScript(key, inst.ScriptPath);
-                    }
-                }
-            }
-            
-        }
-
         // < -------------------- physics loop ------------------ >
         if (currState != EngineState::EDIT_MODE){
 
             while(accTime>=dt){
+
+                // ----------------------------------------------------------------------------------- > BUGS NEED TO FIX
+                for (size_t i = 0; i < transforms.size(); ++i) {
+                    if (!slots[i].alive) continue;
+                    SlotKey key = { (uint32_t)i, slots[i].generation };
+        
+                    for (size_t j = 0; j < scripts[i].Instances.size(); j++) {
+                        auto inst = scripts[i].Instances[j];
+                        if (inst.Type == ScriptType::LUA && inst.Is == Script::ENABLED && !inst.ScriptPath.empty()) {
+                            if (!luaRunner.IsLoaded(key, inst.ScriptPath)) {
+                                luaRunner.LoadScript(key, inst.ScriptPath);
+                            }
+                            luaRunner.Tick(key,inst.ScriptPath, transforms[i], physics[i], dt);
+                        } else if (luaRunner.IsLoaded(key, inst.ScriptPath)) {
+                            luaRunner.UnloadScript(key, inst.ScriptPath);
+                        }
+                    }
+                }
+
                 // < ----- gravity ----- >
                 PhysicsSystem::Update(transforms, physics, slots, dt);
                 accTime -= dt;
@@ -598,6 +603,30 @@ int main() {
                 }
             }
             std::cout << "[LUA] Global script reload completed!" << std::endl;
+        }
+
+        // < ---------- [HOT RELOADING] ---------- >
+        auto modifiedFiles = fileWatcher.ConsumeModifiedFiles();
+        if (!modifiedFiles.empty()) {
+            std::unordered_set<std::string> unqFiles(modifiedFiles.begin(), modifiedFiles.end());
+
+            for (auto changedFile: unqFiles) {
+                std::string changedName = std::filesystem::path(changedFile).filename().string();
+
+                for (size_t i = 0; i < transforms.size(); i++){
+                    if (!slots[i].alive) continue;
+                    for (auto inst: scripts[i].Instances) {
+                        if (inst.Type == ScriptType::LUA && inst.Is == Script::ENABLED) {
+                            std::string scriptName = std::filesystem::path(inst.ScriptPath).filename().string();
+                            if (scriptName == changedName) {
+                                SlotKey key = { (uint32_t)i, slots[i].generation};
+                                luaRunner.ReloadScript(key, inst.ScriptPath);
+                                std::cout << "[WATCHER] Hot-reloaded: " << inst.ScriptPath << " on entity: " << coldData[key.index].name << std::endl;
+                            }
+                        }
+                    } 
+                }
+            }
         }
 
         // -------------------------------------------------------------------------------------------------------------------    
@@ -750,6 +779,7 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(8));
     }
 
+    fileWatcher.Stop();
     luaRunner.shutdown();
 
     ImGui_ImplOpenGL3_Shutdown();

@@ -14,6 +14,7 @@
                 "${workspaceFolder}/cpp_engine/src/glad.c",
                 "${workspaceFolder}/cpp_engine/src/Collision.cpp",
                 "${workspaceFolder}/cpp_engine/src/LuaRunner.cpp",
+                "${workspaceFolder}/cpp_engine/src/FileWatcher.cpp",
                 // 2. Compile ImGui Core & Addons
                 "${workspaceFolder}/cpp_engine/imgui/imgui.cpp",
                 "${workspaceFolder}/cpp_engine/imgui/imgui_draw.cpp",
