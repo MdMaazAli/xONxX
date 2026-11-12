@@ -8,7 +8,7 @@
 #include "Physics.h"
 #include "FileManager.h"
 
-enum class EngineState { EDIT_MODE, TRAINING_MODE, INFERENCE_MODE };
+enum class EngineState { EDIT_MODE, TRAINING_MODE, INFERENCE_MODE, SIMULATION_MODE };
 
 class UIManager {
 public:

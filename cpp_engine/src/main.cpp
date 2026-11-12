@@ -89,6 +89,8 @@ void mouse_callback(GLFWwindow* window, double xPosIn, double yPosIn)
 }
 
 void scroll_callback(GLFWwindow* window,double xOffset,double yOffset){
+    if (!cursorInViewport)
+        return;
     camera.ProcessMouseScroll((float)yOffset);
 }
 
@@ -99,17 +101,19 @@ void processInput(GLFWwindow* window){
     if(glfwGetKey(window,GLFW_KEY_ESCAPE) == GLFW_PRESS){
         glfwSetWindowShouldClose(window,true);
     }
-    if(glfwGetKey(window,GLFW_KEY_W) == GLFW_PRESS){
-        camera.ProcessKeyboard(FORWARD,deltaTime);
-    }
-    if(glfwGetKey(window,GLFW_KEY_S) == GLFW_PRESS){
-        camera.ProcessKeyboard(BACKWARD,deltaTime);
-    }
-    if(glfwGetKey(window,GLFW_KEY_A) == GLFW_PRESS){
-        camera.ProcessKeyboard(LEFT,deltaTime);
-    }
-    if(glfwGetKey(window,GLFW_KEY_D) == GLFW_PRESS){
-        camera.ProcessKeyboard(RIGHT,deltaTime);
+    if (cursorInViewport) {
+        if(glfwGetKey(window,GLFW_KEY_W) == GLFW_PRESS){
+            camera.ProcessKeyboard(FORWARD,deltaTime);
+        }
+        if(glfwGetKey(window,GLFW_KEY_S) == GLFW_PRESS){
+            camera.ProcessKeyboard(BACKWARD,deltaTime);
+        }
+        if(glfwGetKey(window,GLFW_KEY_A) == GLFW_PRESS){
+            camera.ProcessKeyboard(LEFT,deltaTime);
+        }
+        if(glfwGetKey(window,GLFW_KEY_D) == GLFW_PRESS){
+            camera.ProcessKeyboard(RIGHT,deltaTime);
+        }
     }
 
     // --- CURSOR UNLOCK TOGGLE ---
@@ -364,11 +368,13 @@ int main() {
 
         if (prevState != currState) {
             accTime = 0.0f;
-            if(prevState == EngineState::EDIT_MODE && (currState == EngineState::TRAINING_MODE || currState == EngineState::INFERENCE_MODE)) {
+            if(prevState == EngineState::EDIT_MODE) {
                 TakeSnapshot();
+                luaRunner.ResetAll();
             }
             else if(currState == EngineState::EDIT_MODE) {
                 RestoreSnapshot();
+                luaRunner.ResetAll();
             }
             
             prevState = currState;
@@ -376,7 +382,7 @@ int main() {
         
         processInput(window);
 
-        if (currState != EngineState::EDIT_MODE){
+        if (currState == EngineState::TRAINING_MODE || currState == EngineState::INFERENCE_MODE){
             
             zmq::message_t request;
             auto received = socket.recv(request, zmq::recv_flags::dontwait); // Non-blocking check
@@ -388,6 +394,7 @@ int main() {
 
                 if(action == "RESET"){
                     RestoreSnapshot();
+                    luaRunner.ResetAll();
                     std::cout << "[RESET] Environment reset to starting line." << std::endl;
                 }
                 else{
@@ -437,9 +444,8 @@ int main() {
 
         // < -------------------- physics loop ------------------ >
         if (currState != EngineState::EDIT_MODE){
-
+            
             while(accTime>=dt){
-
                 // ----------------------------------------------------------------------------------- > BUGS NEED TO FIX
                 for (size_t i = 0; i < transforms.size(); ++i) {
                     if (!slots[i].alive) continue;

@@ -157,3 +157,13 @@ void LuaRunner::Tick(SlotKey key,const std::string& path, TransformComponent& tr
 void LuaRunner::ReloadScript(SlotKey key, const std::string& path) {
     LoadScript(key, path);
 }
+
+void LuaRunner::ResetAll() {
+    if (!L) return;
+    for (auto& [key, scriptMap] : m_scriptEnvs) {
+        for (auto& [path, envRef] : scriptMap) {
+            luaL_unref(L, LUA_REGISTRYINDEX, envRef);
+        }
+    }
+    m_scriptEnvs.clear();
+}

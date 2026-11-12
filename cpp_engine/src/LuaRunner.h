@@ -21,6 +21,7 @@ class LuaRunner {
         }
 
         void ReloadScript(SlotKey key, const std::string& path = "");
+        void ResetAll();
     
     private:
         lua_State* L = nullptr;

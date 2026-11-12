@@ -145,29 +145,74 @@ void UIManager::GenerateProceduralMetalTexture() {
     int width = 512;
     int height = 512;
     std::vector<unsigned char> data(width * height * 4);
-    
-    // Generate base noise
-    for (int i = 0; i < width * height; ++i) {
-        unsigned char noise = 40 + (rand() % 25); // Dark grey noise
-        data[i*4 + 0] = noise;
-        data[i*4 + 1] = noise;
-        data[i*4 + 2] = noise;
-        data[i*4 + 3] = 255;
+
+    // Brushed anodized graphite — darker base with horizontal micro-grain and sparse specular flecks
+    for (int y = 0; y < height; ++y) {
+        // Horizontal scan-line bands simulate directional brush strokes
+        int rowBrightness = (y % 4 == 0) ? 8 : 0;
+
+        for (int x = 0; x < width; ++x) {
+            int i = y * width + x;
+
+            // Base: dark graphite micro-grain (range 22–40)
+            int grain = 22 + (rand() % 18);
+
+            // Sparse specular micro-flecks — 1 in 200 pixels gets a brightness spike
+            if ((rand() % 200) == 0) grain += 45;
+
+            int val = grain + rowBrightness;
+            if (val > 255) val = 255;
+
+            unsigned char v = (unsigned char)val;
+            data[i*4 + 0] = v;
+            data[i*4 + 1] = v;
+            data[i*4 + 2] = v;
+            data[i*4 + 3] = 255;
+        }
     }
-    
+
     glGenTextures(1, &m_metalTexture);
     glBindTexture(GL_TEXTURE_2D, m_metalTexture);
-    
+
     // Set wrapping to GL_REPEAT so it tiles seamlessly across large windows
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    
+
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data.data());
 }
 
+// File-scope font handles — set once in Init(), used throughout Render and HardwareButton
+static ImFont* s_fontMono      = nullptr;   // Consolas — body text, values, paths
+static ImFont* s_fontBold      = nullptr;   // Arial Bold — section headers, button labels
+static ImFont* s_fontWatermark = nullptr;   // Arial Bold Italic — engraved chassis watermark
+
 void UIManager::Init() {
+    ImGuiIO& io = ImGui::GetIO();
+
+    // Consolas — monospaced, reads like hardware terminal displays
+    if (std::filesystem::exists("C:/Windows/Fonts/consola.ttf")) {
+        s_fontMono = io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/consola.ttf", 15.0f);
+    }
+    // Arial Bold — punchy, tight, used for section headers and button labels
+    if (std::filesystem::exists("C:/Windows/Fonts/arialbd.ttf")) {
+        s_fontBold = io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/arialbd.ttf", 14.0f);
+    }
+    // Arial Bold Italic — crisp large-scale font for the engraved chassis watermark
+    if (std::filesystem::exists("C:/Windows/Fonts/arialbi.ttf")) {
+        s_fontWatermark = io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/arialbi.ttf", 84.0f);
+    } else if (std::filesystem::exists("C:/Windows/Fonts/consolaz.ttf")) {
+        s_fontWatermark = io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/consolaz.ttf", 84.0f);
+    }
+
+    // Fall back to ImGui default if either TTF is missing
+    if (!s_fontMono) s_fontMono = io.Fonts->AddFontDefault();
+    if (!s_fontBold) s_fontBold = s_fontMono;
+
+    // Make Consolas the engine-wide default
+    io.FontDefault = s_fontMono;
+
     GenerateProceduralMetalTexture();
     ApplyRetroHardwareTheme();
 }
@@ -191,46 +236,230 @@ void UIManager::DrawWindowBackground(GLuint textureID) {
             ImVec2 uv_min = ImVec2(0.0f, 0.0f);
             ImVec2 uv_max = ImVec2(draw_w / tileSize, draw_h / tileSize);
             
-            draw_list->AddImage((void*)(intptr_t)textureID, tile_min, tile_max, uv_min, uv_max, IM_COL32(200, 210, 200, 255));
+            draw_list->AddImage((void*)(intptr_t)textureID, tile_min, tile_max, uv_min, uv_max, IM_COL32(220, 220, 220, 255));
         }
     }
+}
+
+// Draws a physically-raised hardware button with a top-edge highlight and bottom-edge shadow.
+// Returns true on the frame the button is clicked, identical to ImGui::Button().
+static bool HardwareButton(const char* label, ImVec2 size = ImVec2(0, 0)) {
+    ImGuiStyle& style = ImGui::GetStyle();
+
+    // Measure label using the bold font so sizing accounts for it
+    ImFont* btnFont = s_fontBold ? s_fontBold : ImGui::GetFont();
+    ImGui::PushFont(btnFont);
+    ImVec2 labelSize = ImGui::CalcTextSize(label, nullptr, true);
+    ImGui::PopFont();
+
+    if (size.x == 0) size.x = labelSize.x + style.FramePadding.x * 2.0f;
+    if (size.y == 0) size.y = labelSize.y + style.FramePadding.y * 2.0f;
+
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    bool pressed = ImGui::InvisibleButton(label, size);
+    bool hovered = ImGui::IsItemHovered();
+    bool held    = ImGui::IsItemActive();
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 pMin = pos;
+    ImVec2 pMax = ImVec2(pos.x + size.x, pos.y + size.y);
+    float rounding = style.FrameRounding;
+
+    // Base fill — raised above the dark panel background, sinks on press
+    // The key: rest surface is LIGHTER than the surrounding panel so it protrudes
+    ImU32 baseFill;
+    if (held)         baseFill = IM_COL32(32, 33, 37, 255);    // pressed: sinks to near-panel darkness
+    else if (hovered) baseFill = IM_COL32(102, 106, 116, 255); // hover:   brighter raised plateau
+    else              baseFill = IM_COL32(82, 86, 95, 255);    // rest:    raised graphite plateau (much lighter than panel)
+
+    dl->AddRectFilled(pMin, pMax, baseFill, rounding);
+
+    if (held) {
+        // Pressed: edges invert — dark on top-left (no longer catching light), lighter on bottom-right
+        dl->AddLine(ImVec2(pMin.x + rounding, pMin.y + 0.5f),  ImVec2(pMax.x - rounding, pMin.y + 0.5f),  IM_COL32(14, 14, 16, 255),  1.5f); // top shadow
+        dl->AddLine(ImVec2(pMin.x + 0.5f, pMin.y + rounding),  ImVec2(pMin.x + 0.5f, pMax.y - rounding),  IM_COL32(14, 14, 16, 255),  1.0f); // left shadow
+        dl->AddLine(ImVec2(pMin.x + rounding, pMax.y - 0.5f),  ImVec2(pMax.x - rounding, pMax.y - 0.5f),  IM_COL32(68, 70, 78, 200),  1.0f); // bottom faint
+        dl->AddLine(ImVec2(pMax.x - 0.5f, pMin.y + rounding),  ImVec2(pMax.x - 0.5f, pMax.y - rounding),  IM_COL32(68, 70, 78, 200),  1.0f); // right faint
+    } else {
+        // Raised: strong bright highlight on top+left edges, deep shadow on bottom+right
+        dl->AddLine(ImVec2(pMin.x + rounding, pMin.y + 0.5f),  ImVec2(pMax.x - rounding, pMin.y + 0.5f),  IM_COL32(148, 154, 168, 230), 1.5f); // top specular
+        dl->AddLine(ImVec2(pMin.x + 0.5f, pMin.y + rounding),  ImVec2(pMin.x + 0.5f, pMax.y - rounding),  IM_COL32(118, 122, 134, 180), 1.0f); // left specular
+        dl->AddLine(ImVec2(pMin.x + rounding, pMax.y - 0.5f),  ImVec2(pMax.x - rounding, pMax.y - 0.5f),  IM_COL32(10, 10, 12, 240),   1.5f); // bottom deep shadow
+        dl->AddLine(ImVec2(pMax.x - 0.5f, pMin.y + rounding),  ImVec2(pMax.x - 0.5f, pMax.y - rounding),  IM_COL32(18, 18, 20, 220),   1.0f); // right shadow
+    }
+
+    // Outer border — dark recess ring so button appears to sit inside a socket
+    dl->AddRect(pMin, pMax, IM_COL32(18, 19, 22, 255), rounding, 0, 1.0f);
+
+    // Label — bold font for legibility, drops 1px on press for tactile feedback
+    float textOffsetY = held ? 1.0f : 0.0f;
+    ImVec2 textPos = ImVec2(
+        pMin.x + (size.x - labelSize.x) * 0.5f,
+        pMin.y + (size.y - labelSize.y) * 0.5f + textOffsetY
+    );
+    ImU32 textCol = held
+        ? IM_COL32(120, 122, 130, 255)   // text dims on press
+        : IM_COL32(232, 234, 236, 255);  // normal warm white
+    dl->AddText(btnFont, btnFont->LegacySize, textPos, textCol, label);
+
+    return pressed;
+}
+
+// Two-column vector control with colored axis badges (X=Red, Y=Green, Z=Blue)
+// Standard across Unity, Unreal, Blender, and Hazel engine inspectors.
+static void DrawVec3Control(const char* label, glm::vec3& values, float resetValue = 0.0f, float columnWidth = 75.0f) {
+    ImFont* boldFont = s_fontBold ? s_fontBold : ImGui::GetFont();
+
+    ImGui::PushID(label);
+
+    ImGui::Columns(2, nullptr, false);
+    ImGui::SetColumnWidth(0, columnWidth);
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("%s", label);
+    ImGui::NextColumn();
+
+    float availWidth = ImGui::GetContentRegionAvail().x;
+    float lineHeight = ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.y * 2.0f;
+    ImVec2 badgeSize = ImVec2(lineHeight, lineHeight);
+    float itemSpacing = 4.0f;
+    float itemWidth = (availWidth - (badgeSize.x * 3.0f) - (itemSpacing * 5.0f)) / 3.0f;
+    if (itemWidth < 40.0f) itemWidth = 40.0f;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(itemSpacing, 0.0f));
+
+    // X Axis - Red badge
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.80f, 0.16f, 0.22f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.92f, 0.24f, 0.30f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.70f, 0.12f, 0.18f, 1.0f));
+    ImGui::PushFont(boldFont);
+    if (ImGui::Button("X", badgeSize)) values.x = resetValue;
+    ImGui::PopFont();
+    ImGui::PopStyleColor(3);
+
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(itemWidth);
+    ImGui::DragFloat("##X", &values.x, 0.05f, 0.0f, 0.0f, "%.3f");
+    ImGui::SameLine();
+
+    // Y Axis - Green badge (standard 3D RGB/XYZ gizmo convention)
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.65f, 0.26f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.78f, 0.34f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.14f, 0.55f, 0.20f, 1.0f));
+    ImGui::PushFont(boldFont);
+    if (ImGui::Button("Y", badgeSize)) values.y = resetValue;
+    ImGui::PopFont();
+    ImGui::PopStyleColor(3);
+
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(itemWidth);
+    ImGui::DragFloat("##Y", &values.y, 0.05f, 0.0f, 0.0f, "%.3f");
+    ImGui::SameLine();
+
+    // Z Axis - Blue badge
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.44f, 0.82f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.55f, 0.94f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.36f, 0.72f, 1.0f));
+    ImGui::PushFont(boldFont);
+    if (ImGui::Button("Z", badgeSize)) values.z = resetValue;
+    ImGui::PopFont();
+    ImGui::PopStyleColor(3);
+
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(itemWidth);
+    ImGui::DragFloat("##Z", &values.z, 0.05f, 0.0f, 0.0f, "%.3f");
+
+    ImGui::PopStyleVar();
+    ImGui::Columns(1);
+    ImGui::PopID();
 }
 
 void UIManager::ApplyRetroHardwareTheme() {
     ImGuiStyle& style = ImGui::GetStyle();
     ImVec4* colors = style.Colors;
 
-    style.WindowRounding = 0.0f;
-    style.FrameRounding = 0.0f;
-    style.GrabRounding = 0.0f;
-    style.WindowBorderSize = 2.0f;
-    style.FrameBorderSize = 2.0f;
-    style.ItemSpacing = ImVec2(10.0f, 8.0f);
-    style.ScrollbarRounding = 0.0f;
+    // Geometry — CNC milled tactile rounding
+    style.WindowRounding    = 2.0f;
+    style.FrameRounding     = 3.5f;
+    style.GrabRounding      = 3.0f;
+    style.TabRounding       = 2.0f;
+    style.ScrollbarRounding = 2.0f;
+    style.WindowBorderSize  = 1.0f;
+    style.FrameBorderSize   = 1.0f;
+    style.ItemSpacing       = ImVec2(10.0f, 8.0f);
 
-    colors[ImGuiCol_WindowBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-    colors[ImGuiCol_ChildBg]  = ImVec4(0.08f, 0.08f, 0.08f, 0.7f);
-    colors[ImGuiCol_PopupBg]  = ImVec4(0.10f, 0.10f, 0.10f, 0.9f);
-    colors[ImGuiCol_Border]               = ImVec4(0.35f, 0.40f, 0.35f, 1.0f); 
-    colors[ImGuiCol_BorderShadow]         = ImVec4(0.00f, 0.00f, 0.00f, 1.0f);
-    colors[ImGuiCol_FrameBg]              = ImVec4(0.12f, 0.12f, 0.12f, 0.8f);
-    colors[ImGuiCol_FrameBgHovered]       = ImVec4(0.18f, 0.25f, 0.18f, 0.9f);
-    colors[ImGuiCol_FrameBgActive]        = ImVec4(0.15f, 0.35f, 0.15f, 0.9f);
-    colors[ImGuiCol_TitleBg]              = ImVec4(0.10f, 0.10f, 0.10f, 0.8f);
-    colors[ImGuiCol_TitleBgActive]        = ImVec4(0.15f, 0.22f, 0.15f, 0.8f); 
-    colors[ImGuiCol_TitleBgCollapsed]     = ImVec4(0.05f, 0.05f, 0.05f, 0.8f);
-    colors[ImGuiCol_Header]               = ImVec4(0.15f, 0.18f, 0.15f, 0.8f);
-    colors[ImGuiCol_HeaderHovered]        = ImVec4(0.20f, 0.28f, 0.20f, 0.9f);
-    colors[ImGuiCol_HeaderActive]         = ImVec4(0.25f, 0.35f, 0.25f, 0.9f);
-    colors[ImGuiCol_Button]               = ImVec4(0.15f, 0.15f, 0.15f, 0.8f);
-    colors[ImGuiCol_ButtonHovered]        = ImVec4(0.25f, 0.35f, 0.25f, 0.9f); 
-    colors[ImGuiCol_ButtonActive]         = ImVec4(0.10f, 0.45f, 0.10f, 0.9f); 
-    colors[ImGuiCol_Text]                 = ImVec4(0.4f, 1.0f, 0.6f, 1.0f);
-    colors[ImGuiCol_TextDisabled]         = ImVec4(0.2f, 0.5f, 0.3f, 1.0f);
-    colors[ImGuiCol_ScrollbarBg]          = ImVec4(0.05f, 0.05f, 0.05f, 0.5f);
-    colors[ImGuiCol_ScrollbarGrab]        = ImVec4(0.20f, 0.20f, 0.20f, 0.8f);
-    colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.30f, 0.35f, 0.30f, 0.9f);
-    colors[ImGuiCol_ScrollbarGrabActive]  = ImVec4(0.15f, 0.45f, 0.15f, 0.9f);
+    // Surface
+    colors[ImGuiCol_WindowBg]             = ImVec4(0.0f,  0.0f,  0.0f,  0.0f);   // transparent — texture shows through
+    colors[ImGuiCol_ChildBg]              = ImVec4(0.11f, 0.12f, 0.13f, 0.85f);  // dark graphite panel
+    colors[ImGuiCol_PopupBg]              = ImVec4(0.11f, 0.12f, 0.13f, 0.95f);
+
+    // Borders
+    colors[ImGuiCol_Border]               = ImVec4(0.22f, 0.23f, 0.25f, 1.0f);   // machined groove dark
+    colors[ImGuiCol_BorderShadow]         = ImVec4(0.08f, 0.08f, 0.09f, 1.0f);
+
+    // Text
+    colors[ImGuiCol_Text]                 = ImVec4(0.91f, 0.92f, 0.93f, 1.0f);   // technical warm white
+    colors[ImGuiCol_TextDisabled]         = ImVec4(0.42f, 0.44f, 0.48f, 1.0f);   // cool steel gray
+
+    // Frame slots (input fields, combo boxes, etc.)
+    colors[ImGuiCol_FrameBg]              = ImVec4(0.15f, 0.16f, 0.18f, 0.9f);   // recessed slot
+    colors[ImGuiCol_FrameBgHovered]       = ImVec4(0.19f, 0.20f, 0.22f, 1.0f);
+    colors[ImGuiCol_FrameBgActive]        = ImVec4(0.22f, 0.23f, 0.26f, 1.0f);
+
+    // Title bars
+    colors[ImGuiCol_TitleBg]              = ImVec4(0.09f, 0.09f, 0.10f, 1.0f);
+    colors[ImGuiCol_TitleBgActive]        = ImVec4(0.14f, 0.15f, 0.17f, 1.0f);
+    colors[ImGuiCol_TitleBgCollapsed]     = ImVec4(0.07f, 0.07f, 0.08f, 1.0f);
+
+    // Menu bar
+    colors[ImGuiCol_MenuBarBg]            = ImVec4(0.10f, 0.10f, 0.11f, 1.0f);
+
+    // Buttons — matte tactile pads, safety orange on press
+    colors[ImGuiCol_Button]               = ImVec4(0.17f, 0.18f, 0.20f, 1.0f);
+    colors[ImGuiCol_ButtonHovered]        = ImVec4(0.24f, 0.25f, 0.28f, 1.0f);
+    colors[ImGuiCol_ButtonActive]         = ImVec4(0.91f, 0.094f, 0.427f, 1.0f);   // hot pink #E8186D
+
+    // Collapsing headers
+    colors[ImGuiCol_Header]               = ImVec4(0.17f, 0.18f, 0.20f, 1.0f);
+    colors[ImGuiCol_HeaderHovered]        = ImVec4(0.24f, 0.25f, 0.28f, 1.0f);
+    colors[ImGuiCol_HeaderActive]         = ImVec4(0.91f, 0.094f, 0.427f, 0.85f);  // pink
+
+    // Interactive controls
+    colors[ImGuiCol_CheckMark]            = ImVec4(0.91f, 0.094f, 0.427f, 1.0f);   // pink checkmark
+    colors[ImGuiCol_SliderGrab]           = ImVec4(0.65f, 0.67f, 0.70f, 1.0f);   // brushed steel grab
+    colors[ImGuiCol_SliderGrabActive]     = ImVec4(0.91f, 0.094f, 0.427f, 1.0f);   // pink active
+
+    // Tabs
+    colors[ImGuiCol_Tab]                  = ImVec4(0.12f, 0.13f, 0.14f, 1.0f);
+    colors[ImGuiCol_TabHovered]           = ImVec4(0.24f, 0.25f, 0.28f, 1.0f);
+    colors[ImGuiCol_TabActive]            = ImVec4(0.91f, 0.094f, 0.427f, 0.9f);   // pink active tab
+    colors[ImGuiCol_TabUnfocused]         = ImVec4(0.10f, 0.10f, 0.11f, 1.0f);
+    colors[ImGuiCol_TabUnfocusedActive]   = ImVec4(0.18f, 0.19f, 0.21f, 1.0f);
+
+    // Scrollbar
+    colors[ImGuiCol_ScrollbarBg]          = ImVec4(0.08f, 0.08f, 0.09f, 1.0f);
+    colors[ImGuiCol_ScrollbarGrab]        = ImVec4(0.28f, 0.29f, 0.32f, 1.0f);
+    colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.38f, 0.39f, 0.42f, 1.0f);
+    colors[ImGuiCol_ScrollbarGrabActive]  = ImVec4(0.91f, 0.094f, 0.427f, 1.0f);   // pink on drag
+
+    // Separators
+    colors[ImGuiCol_Separator]            = ImVec4(0.18f, 0.19f, 0.21f, 1.0f);
+    colors[ImGuiCol_SeparatorHovered]     = ImVec4(0.30f, 0.31f, 0.34f, 1.0f);
+    colors[ImGuiCol_SeparatorActive]      = ImVec4(0.91f, 0.094f, 0.427f, 1.0f);
+
+    // Resize grip
+    colors[ImGuiCol_ResizeGrip]           = ImVec4(0.22f, 0.23f, 0.25f, 0.4f);
+    colors[ImGuiCol_ResizeGripHovered]    = ImVec4(0.38f, 0.39f, 0.42f, 0.7f);
+    colors[ImGuiCol_ResizeGripActive]     = ImVec4(0.91f, 0.094f, 0.427f, 0.9f);
+
+    // Docking
+    colors[ImGuiCol_DockingPreview]       = ImVec4(0.91f, 0.094f, 0.427f, 0.7f);
+    colors[ImGuiCol_DockingEmptyBg]       = ImVec4(0.09f, 0.09f, 0.10f, 1.0f);
+
+    // Plot lines (telemetry)
+    colors[ImGuiCol_PlotLines]            = ImVec4(0.65f, 0.67f, 0.70f, 1.0f);
+    colors[ImGuiCol_PlotLinesHovered]     = ImVec4(0.91f, 0.094f, 0.427f, 1.0f);
+    colors[ImGuiCol_PlotHistogram]        = ImVec4(0.50f, 0.52f, 0.56f, 1.0f);
+    colors[ImGuiCol_PlotHistogramHovered] = ImVec4(0.91f, 0.094f, 0.427f, 1.0f);
 }
 
 void UIManager::SetupDockingLayout() {
@@ -293,7 +522,9 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
 
     ImGui::Begin("Telemetry", nullptr, ImGuiWindowFlags_NoCollapse);
     DrawWindowBackground(m_metalTexture);
+    ImGui::PushFont(s_fontBold);
     ImGui::Text("=== TELEMETRY ===");
+    ImGui::PopFont();
     ImGui::Separator();
     if (!transforms.empty()) {
         ImGui::Text("POS X: %05.2f", transforms[0].Position.x);
@@ -313,32 +544,56 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
     DrawWindowBackground(m_metalTexture);
 
     if (activeEntityID != -1 && activeEntityID < (int)transforms.size() && slots[activeEntityID].alive) {
-        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "%s [ID: %d]", coldData[activeEntityID].name.c_str(), activeEntityID);
+        ImGui::PushFont(s_fontBold);
+        ImGui::TextColored(ImVec4(0.91f, 0.094f, 0.427f, 1.0f), "%s [ID: %d]", coldData[activeEntityID].name.c_str(), activeEntityID);
+        ImGui::PopFont();
         ImGui::SameLine();
         ImGui::TextDisabled("(Selected)");
 
         ImGui::SameLine(ImGui::GetWindowWidth() - 85);
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.15f, 0.15f, 0.8f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.2f, 0.2f, 0.9f));
+        ImGui::PushFont(s_fontBold);
         if (ImGui::Button("Delete", ImVec2(70, 0))) {
             m_deleteRequestUUID = activeEntityUUID;
         }
+        ImGui::PopFont();
         ImGui::PopStyleColor(2);
 
         char nameBuf[64];
         strncpy(nameBuf, coldData[activeEntityID].name.c_str(), sizeof(nameBuf));
         nameBuf[sizeof(nameBuf) - 1] = '\0';
-        if (ImGui::InputText("Name", nameBuf, sizeof(nameBuf))) {
+
+        ImGui::Columns(2, "##EntityHeaderCols", false);
+        ImGui::SetColumnWidth(0, 75.0f);
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("Name");
+        ImGui::NextColumn();
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::InputText("##Name", nameBuf, sizeof(nameBuf))) {
             coldData[activeEntityID].name = nameBuf;
         }
-        ImGui::TextDisabled("UUID: 0x%016llX", (unsigned long long)coldData[activeEntityID].uuid);
+
+        ImGui::NextColumn();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("UUID");
+        ImGui::NextColumn();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("0x%016llX", (unsigned long long)coldData[activeEntityID].uuid);
+        ImGui::Columns(1);
 
         ImGui::Separator();
 
         // < ------------------- TRANSFORM ------------------- >
-        if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::DragFloat3("Position", &transforms[activeEntityID].Position.x, 0.05f);
-            ImGui::DragFloat3("Size", &transforms[activeEntityID].Size.x, 0.05f);
+        ImGui::PushFont(s_fontBold);
+        bool openTransform = ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen);
+        ImGui::PopFont();
+        if (openTransform) {
+            ImGui::Spacing();
+            DrawVec3Control("Position", transforms[activeEntityID].Position, 0.0f, 75.0f);
+            ImGui::Spacing();
+            DrawVec3Control("Size", transforms[activeEntityID].Size, 1.0f, 75.0f);
+            ImGui::Spacing();
         }
 
         // < ------------------- RIGIDBODY ------------------- >
@@ -346,15 +601,27 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
             auto& phyComp = physics[activeEntityID];
             bool hasRb = (phyComp.Rigidbody != Rigidbody::NO);
 
-            if (ImGui::CollapsingHeader("Rigidbody", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::PushFont(s_fontBold);
+            bool openRb = ImGui::CollapsingHeader("Rigidbody", ImGuiTreeNodeFlags_DefaultOpen);
+            ImGui::PopFont();
+            if (openRb) {
+                ImGui::Spacing();
                 if (ImGui::Checkbox("Enable Rigidbody", &hasRb)) {
                     if (hasRb) SetRigidbody(phyComp);
                     else RemoveRigidbody(phyComp);
                 }
 
                 if (hasRb) {
-                    ImGui::DragFloat("Mass", &phyComp.Mass, 0.1f, 0.01f, 1000.0f);
+                    ImGui::Columns(2, "##RbMassCols", false);
+                    ImGui::SetColumnWidth(0, 75.0f);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::Text("Mass");
+                    ImGui::NextColumn();
+                    ImGui::SetNextItemWidth(-1.0f);
+                    ImGui::DragFloat("##Mass", &phyComp.Mass, 0.1f, 0.01f, 1000.0f, "%.2f");
+                    ImGui::Columns(1);
                 }
+                ImGui::Spacing();
             }
         }
 
@@ -363,16 +630,34 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
             auto& agent = agents[activeEntityID];
             bool hasAgent = (agent.Mode != AgentMode::NONE);
 
-            if (ImGui::CollapsingHeader("AI Agent Brain", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::PushFont(s_fontBold);
+            bool openBrain = ImGui::CollapsingHeader("AI Agent Brain", ImGuiTreeNodeFlags_DefaultOpen);
+            ImGui::PopFont();
+            if (openBrain) {
+                ImGui::Spacing();
                 if (hasAgent) {
-                    ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "Module: %s", agent.AgentModule.c_str());
-                    ImGui::TextDisabled("Script: %s", agent.ScriptPath.c_str());
+                    ImGui::Columns(2, "##BrainCols", false);
+                    ImGui::SetColumnWidth(0, 75.0f);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::Text("Module");
+                    ImGui::NextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextColored(ImVec4(0.91f, 0.094f, 0.427f, 1.0f), "%s", agent.AgentModule.c_str());
 
-                    if (ImGui::Button("Edit Brain Script")) {
+                    ImGui::NextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextDisabled("Script");
+                    ImGui::NextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextDisabled("%s", agent.ScriptPath.c_str());
+                    ImGui::Columns(1);
+
+                    ImGui::Spacing();
+                    if (HardwareButton("Edit Brain Script")) {
                         LaunchScriptInEditor(agent.ScriptPath);
                     }
                     ImGui::SameLine();
-                    if (ImGui::Button("Remove Brain")) {
+                    if (HardwareButton("Remove Brain")) {
                         RemoveAgentBrain(agent);
                     }
 
@@ -387,14 +672,16 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
                     }
                 } else {
                     ImGui::TextDisabled("No AI Brain attached.");
-                    if (ImGui::Button("Attach DQN Trainer")) {
+                    ImGui::Spacing();
+                    if (HardwareButton("Attach DQN Trainer")) {
                         SetAgentBrain(agent, activeEntityID, "DQN Trainer");
                     }
                     ImGui::SameLine();
-                    if (ImGui::Button("Attach PPO Trainer")) {
+                    if (HardwareButton("Attach PPO Trainer")) {
                         SetAgentBrain(agent, activeEntityID, "PPO Trainer");
                     }
                 }
+                ImGui::Spacing();
             }
         }
 
@@ -403,7 +690,11 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
             auto& script = scripts[activeEntityID];
             bool hasScript = !script.Instances.empty();
 
-            if (ImGui::CollapsingHeader("Script Component", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::PushFont(s_fontBold);
+            bool openScript = ImGui::CollapsingHeader("Script Component", ImGuiTreeNodeFlags_DefaultOpen);
+            ImGui::PopFont();
+            if (openScript) {
+                ImGui::Spacing();
                 if (hasScript) {
                     for (size_t s = 0; s < script.Instances.size(); ++s) {
                         auto& inst = script.Instances[s];
@@ -423,25 +714,38 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
                             ? ImVec4(0.2f, 0.8f, 1.0f, 1.0f) 
                             : ImVec4(1.0f, 0.6f, 0.2f, 1.0f);
 
+                        ImGui::Columns(2, "##ScriptCardCols", false);
+                        ImGui::SetColumnWidth(0, 75.0f);
+                        ImGui::AlignTextToFramePadding();
                         ImGui::TextColored(langColor, "%s", langStr);
-                        ImGui::SameLine();
+                        ImGui::NextColumn();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::PushFont(s_fontBold);
                         ImGui::Text("%s", inst.ScriptName.c_str());
-
+                        ImGui::PopFont();
+                        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 65.0f);
                         bool isEnabled = (inst.Is == Script::ENABLED);
                         if (ImGui::Checkbox("Enabled", &isEnabled)) {
                             inst.Is = isEnabled ? Script::ENABLED : Script::DISABLED;
                         }
 
-                        ImGui::TextDisabled("Path: %s", inst.ScriptPath.c_str());
-                        
-                        if (ImGui::Button("Reload Script")) {
+                        ImGui::NextColumn();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextDisabled("Path");
+                        ImGui::NextColumn();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextDisabled("%s", inst.ScriptPath.c_str());
+                        ImGui::Columns(1);
+
+                        ImGui::Spacing();
+                        if (HardwareButton("RELOAD")) {
                             m_reloadScriptUUID = activeEntityUUID;
                         }
-                        if (ImGui::Button("Edit Script")) {
+                        if (HardwareButton("Edit Script")) {
                             LaunchScriptInEditor(inst.ScriptPath);
                         }
                         ImGui::SameLine();
-                        if (ImGui::Button("Remove Script")) {
+                        if (HardwareButton("Remove Script")) {
                             RemoveScript(script, s);
                             ImGui::PopID();
                             break;
@@ -453,6 +757,7 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
                     ImGui::TextDisabled("No script attached.");
                     ImGui::TextDisabled("Drag & drop a script from Assets here.");
                 }
+                ImGui::Spacing();
             }
         }
 
@@ -482,12 +787,15 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
     DrawWindowBackground(m_metalTexture);
     
     // --- MODE SWITCHER ---
+    ImGui::PushFont(s_fontBold);
     ImGui::Text("MODE:");
+    ImGui::PopFont();
     ImGui::SameLine();
     
     // Helper lambda to draw a glowing button
     auto DrawModeButton = [&](const char* label, EngineState targetState, ImVec4 glowColor) {
         bool isActive = (m_state == targetState);
+        ImGui::PushFont(s_fontBold);
         if (isActive) {
             ImGui::PushStyleColor(ImGuiCol_Button, glowColor);
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, glowColor);
@@ -500,16 +808,19 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
             if (ImGui::Button(label)) m_state = targetState;
             ImGui::PopStyleColor(1);
         }
+        ImGui::PopFont();
     };
 
-    DrawModeButton("[ EDIT ]", EngineState::EDIT_MODE, ImVec4(0.3f, 1.0f, 0.3f, 1.0f)); // Neon Green
+    DrawModeButton("EDIT", EngineState::EDIT_MODE, ImVec4(0.91f, 0.094f, 0.427f, 1.0f)); // Hot pink
     ImGui::SameLine();
-    DrawModeButton("[ TRAIN ]", EngineState::TRAINING_MODE, ImVec4(1.0f, 0.2f, 0.2f, 1.0f)); // Neon Red
+    DrawModeButton("TRAIN", EngineState::TRAINING_MODE, ImVec4(1.0f, 0.2f, 0.2f, 1.0f)); // Neon Red
     ImGui::SameLine();
-    DrawModeButton("[ INFERENCE ]", EngineState::INFERENCE_MODE, ImVec4(0.2f, 0.6f, 1.0f, 1.0f)); // Neon Blue
+    DrawModeButton("INFERENCE", EngineState::INFERENCE_MODE, ImVec4(0.2f, 0.6f, 1.0f, 1.0f)); // Neon Blue
+    ImGui::SameLine();
+    DrawModeButton("SIMULATE", EngineState::SIMULATION_MODE, ImVec4(0.91f, 0.094f, 0.427f, 1.0f)); // Hot Pink
     
     ImGui::SameLine(ImGui::GetWindowWidth() - 150); // Push to far right
-    if (ImGui::Button("GLOBAL RELOAD")) {
+    if (HardwareButton("GLOBAL RELOAD")) {
         m_globalReloadRequest = true;
     }
     ImGui::End();
@@ -519,19 +830,18 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
     
     // --- Engraved Watermark ---
     ImDrawList* console_draw = ImGui::GetWindowDrawList();
-    const char* watermark = "ONxX";
-    ImFont* font = ImGui::GetFont();
-    float scale = 8.0f;
-    float fontSize = ImGui::GetFontSize() * scale;
+    const char* watermark = "xONxX";
+    ImFont* font = s_fontWatermark ? s_fontWatermark : ImGui::GetFont();
+    float fontSize = font->LegacySize > 0.0f ? font->LegacySize : (ImGui::GetFontSize() * 5.0f);
     ImVec2 t_size = font->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, watermark);
     ImVec2 curPos = ImGui::GetCursorScreenPos();
     ImVec2 avail = ImGui::GetContentRegionAvail();
     ImVec2 center_pos = ImVec2(curPos.x + (avail.x - t_size.x) * 0.5f, curPos.y + (avail.y - t_size.y) * 0.5f);
     
     // Highlight (simulates light catching the bottom edge of an indentation)
-    console_draw->AddText(font, fontSize, ImVec2(center_pos.x + 3.0f, center_pos.y + 3.0f), IM_COL32(100, 110, 100, 80), watermark);
+    console_draw->AddText(font, fontSize, ImVec2(center_pos.x + 2.0f, center_pos.y + 2.0f), IM_COL32(95, 100, 110, 100), watermark);
     // Deep shadow (simulates the depth of the stamp)
-    console_draw->AddText(font, fontSize, center_pos, IM_COL32(15, 20, 15, 200), watermark);
+    console_draw->AddText(font, fontSize, center_pos, IM_COL32(12, 13, 16, 230), watermark);
 
     // ------------------------------------------------------------------------------------------------------------------------
     // ------------------------------------------------------------------------------------------------------------------------
@@ -545,7 +855,9 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
     ImGui::Begin("Hierarchy", nullptr, ImGuiWindowFlags_NoCollapse);
     DrawWindowBackground(m_metalTexture);
     
+    ImGui::PushFont(s_fontBold);
     ImGui::Text("SCENE ENTITIES");
+    ImGui::PopFont();
     ImGui::Separator();
     
     for (size_t i = 0; i < transforms.size(); ++i) {
@@ -608,7 +920,7 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
                         SetAgentBrain(agent, (int)i, "DQN Trainer");
                     }
                 } else {
-                    ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "Brain: %s", agent.AgentModule.c_str());
+                    ImGui::TextColored(ImVec4(0.91f, 0.094f, 0.427f, 1.0f), "Brain: %s", agent.AgentModule.c_str());
                     ImGui::TextDisabled("Script: %s", agent.ScriptPath.c_str());
                     ImGui::Separator();
 
@@ -698,11 +1010,14 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
     ImGui::Begin("Assets", nullptr, ImGuiWindowFlags_NoCollapse);
     DrawWindowBackground(m_metalTexture);
     
+    ImGui::PushFont(s_fontBold);
     ImGui::Text("MESHES");
+    ImGui::PopFont();
     ImGui::Separator();
     
     ImVec2 meshBtnSize(80.0f, 80.0f);
     ImDrawList* drawList = ImGui::GetWindowDrawList();
+    ImFont* boldFont = s_fontBold ? s_fontBold : ImGui::GetFont();
 
     ImGui::PushID("Primitive_Sphere");
     if (ImGui::Button("##SphereBtn", meshBtnSize)) {}
@@ -715,11 +1030,11 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
     ImVec2 s_min = ImGui::GetItemRectMin();
     ImVec2 s_max = ImGui::GetItemRectMax();
     ImVec2 s_center = ImVec2(s_min.x + meshBtnSize.x * 0.5f, s_min.y + 30.0f);
-    drawList->AddCircle(s_center, 18.0f, IM_COL32(100, 255, 150, 220), 24, 2.0f);
-    drawList->AddLine(ImVec2(s_center.x - 18.0f, s_center.y), ImVec2(s_center.x + 18.0f, s_center.y), IM_COL32(80, 200, 120, 150), 1.5f);
+    drawList->AddCircle(s_center, 18.0f, IM_COL32(232, 25, 110, 200), 24, 2.0f);
+    drawList->AddLine(ImVec2(s_center.x - 18.0f, s_center.y), ImVec2(s_center.x + 18.0f, s_center.y), IM_COL32(180, 20, 86, 150), 1.5f);
     const char* s_text = "Sphere";
-    ImVec2 s_tsize = ImGui::CalcTextSize(s_text);
-    drawList->AddText(ImVec2(s_min.x + (meshBtnSize.x - s_tsize.x) * 0.5f, s_max.y - s_tsize.y - 6.0f), IM_COL32(220, 240, 220, 255), s_text);
+    ImVec2 s_tsize = boldFont->CalcTextSizeA(boldFont->LegacySize, FLT_MAX, -1.0f, s_text);
+    drawList->AddText(boldFont, boldFont->LegacySize, ImVec2(s_min.x + (meshBtnSize.x - s_tsize.x) * 0.5f, s_max.y - s_tsize.y - 6.0f), IM_COL32(232, 234, 236, 255), s_text);
     ImGui::PopID();
 
     ImGui::SameLine();
@@ -742,15 +1057,15 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
         ImVec2(c_center.x, c_center.y),
         ImVec2(c_center.x - cs, c_center.y - cs * 0.5f)
     };
-    drawList->AddPolyline(top, 4, IM_COL32(100, 255, 150, 220), ImDrawFlags_Closed, 2.0f);
-    drawList->AddLine(top[2], ImVec2(c_center.x, c_center.y + cs), IM_COL32(100, 255, 150, 220), 2.0f);
-    drawList->AddLine(top[1], ImVec2(top[1].x, top[1].y + cs), IM_COL32(100, 255, 150, 220), 2.0f);
-    drawList->AddLine(top[3], ImVec2(top[3].x, top[3].y + cs), IM_COL32(100, 255, 150, 220), 2.0f);
-    drawList->AddLine(ImVec2(top[3].x, top[3].y + cs), ImVec2(c_center.x, c_center.y + cs), IM_COL32(100, 255, 150, 220), 2.0f);
-    drawList->AddLine(ImVec2(top[1].x, top[1].y + cs), ImVec2(c_center.x, c_center.y + cs), IM_COL32(100, 255, 150, 220), 2.0f);
+    drawList->AddPolyline(top, 4, IM_COL32(232, 25, 110, 200), ImDrawFlags_Closed, 2.0f);
+    drawList->AddLine(top[2], ImVec2(c_center.x, c_center.y + cs), IM_COL32(232, 25, 110, 200), 2.0f);
+    drawList->AddLine(top[1], ImVec2(top[1].x, top[1].y + cs), IM_COL32(232, 25, 110, 200), 2.0f);
+    drawList->AddLine(top[3], ImVec2(top[3].x, top[3].y + cs), IM_COL32(232, 25, 110, 200), 2.0f);
+    drawList->AddLine(ImVec2(top[3].x, top[3].y + cs), ImVec2(c_center.x, c_center.y + cs), IM_COL32(232, 25, 110, 200), 2.0f);
+    drawList->AddLine(ImVec2(top[1].x, top[1].y + cs), ImVec2(c_center.x, c_center.y + cs), IM_COL32(232, 25, 110, 200), 2.0f);
     const char* c_text = "Cube";
-    ImVec2 c_tsize = ImGui::CalcTextSize(c_text);
-    drawList->AddText(ImVec2(c_min.x + (meshBtnSize.x - c_tsize.x) * 0.5f, c_max.y - c_tsize.y - 6.0f), IM_COL32(220, 240, 220, 255), c_text);
+    ImVec2 c_tsize = boldFont->CalcTextSizeA(boldFont->LegacySize, FLT_MAX, -1.0f, c_text);
+    drawList->AddText(boldFont, boldFont->LegacySize, ImVec2(c_min.x + (meshBtnSize.x - c_tsize.x) * 0.5f, c_max.y - c_tsize.y - 6.0f), IM_COL32(232, 234, 236, 255), c_text);
     ImGui::PopID();
 
     ImGui::SameLine();
@@ -771,17 +1086,19 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
     ImVec2 baseL = ImVec2(p_center.x - ps, p_center.y + ps * 0.6f);
     ImVec2 baseM = ImVec2(p_center.x - ps * 0.2f, p_center.y + ps * 0.8f);
     ImVec2 baseR = ImVec2(p_center.x + ps, p_center.y + ps * 0.5f);
-    drawList->AddTriangle(apex, baseL, baseM, IM_COL32(100, 255, 150, 220), 2.0f);
-    drawList->AddTriangle(apex, baseM, baseR, IM_COL32(100, 255, 150, 220), 2.0f);
-    drawList->AddLine(baseL, baseR, IM_COL32(80, 200, 120, 150), 1.5f);
+    drawList->AddTriangle(apex, baseL, baseM, IM_COL32(232, 25, 110, 200), 2.0f);
+    drawList->AddTriangle(apex, baseM, baseR, IM_COL32(232, 25, 110, 200), 2.0f);
+    drawList->AddLine(baseL, baseR, IM_COL32(180, 20, 86, 150), 1.5f);
     const char* p_text = "Pyramid";
-    ImVec2 p_tsize = ImGui::CalcTextSize(p_text);
-    drawList->AddText(ImVec2(p_bmin.x + (meshBtnSize.x - p_tsize.x) * 0.5f, p_bmax.y - p_tsize.y - 6.0f), IM_COL32(220, 240, 220, 255), p_text);
+    ImVec2 p_tsize = boldFont->CalcTextSizeA(boldFont->LegacySize, FLT_MAX, -1.0f, p_text);
+    drawList->AddText(boldFont, boldFont->LegacySize, ImVec2(p_bmin.x + (meshBtnSize.x - p_tsize.x) * 0.5f, p_bmax.y - p_tsize.y - 6.0f), IM_COL32(232, 234, 236, 255), p_text);
     ImGui::PopID();
 
     ImGui::PushID("python_scripts");
 
+    ImGui::PushFont(s_fontBold);
     ImGui::Text("Python Scripts");
+    ImGui::PopFont();
     ImGui::Separator();
 
     if (ImGui::BeginChild("Python Scripts", ImVec2(0, 200), true)) {
@@ -798,7 +1115,9 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
     ImGui::PushID("directory");
 
     ImGui::Dummy(ImVec2(0, 15));
+    ImGui::PushFont(s_fontBold);
     ImGui::Text("Directory");
+    ImGui::PopFont();
     ImGui::Separator();
 
     if (ImGui::BeginChild("Directory", ImVec2(0, 200), true)) {
@@ -821,13 +1140,15 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
     ImGui::Begin("Model Library", nullptr, ImGuiWindowFlags_NoCollapse);
     DrawWindowBackground(m_metalTexture);
     
+    ImGui::PushFont(s_fontBold);
     ImGui::Text("MODEL SCRIPTS");
+    ImGui::PopFont();
     ImGui::Separator();
     
     ImVec2 modelBtnSize(180.0f, 32.0f);
 
     // Create draggable modules
-    ImGui::Button("DQN Trainer", modelBtnSize);
+    HardwareButton("DQN Trainer", modelBtnSize);
     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
         const char* payload = "DQN Trainer";
         ImGui::SetDragDropPayload("RL_MODEL", payload, strlen(payload) + 1);
@@ -835,7 +1156,7 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
         ImGui::EndDragDropSource();
     }
     
-    ImGui::Button("PPO Trainer", modelBtnSize);
+    HardwareButton("PPO Trainer", modelBtnSize);
     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
         const char* payload = "PPO Trainer";
         ImGui::SetDragDropPayload("RL_MODEL", payload, strlen(payload) + 1);
@@ -844,10 +1165,12 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
     }
     
     ImGui::Dummy(ImVec2(0, 20));
+    ImGui::PushFont(s_fontBold);
     ImGui::Text("EXTRACTED BRAINS");
+    ImGui::PopFont();
     ImGui::Separator();
     
-    ImGui::Button("DQN_Brain_v1.onnx", modelBtnSize);
+    HardwareButton("DQN_Brain_v1.onnx", modelBtnSize);
     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
         const char* payload = "DQN_Brain_v1";
         ImGui::SetDragDropPayload("RL_BRAIN", payload, strlen(payload) + 1);
@@ -1016,7 +1339,7 @@ void UIManager::Render(GLFWwindow* window, GLuint fboTextureId, std::vector<Tran
                     SetAgentBrain(agent, activePopupID, "DQN Trainer");
                 }
             } else {
-                ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.5f, 1.0f), "Brain: %s", agent.AgentModule.c_str());
+                ImGui::TextColored(ImVec4(0.91f, 0.094f, 0.427f, 1.0f), "Brain: %s", agent.AgentModule.c_str());
                 ImGui::TextDisabled("Script: %s", agent.ScriptPath.c_str());
                 ImGui::Separator();
 
