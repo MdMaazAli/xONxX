@@ -108,10 +108,19 @@ void RemoveAgentBrain(AgentComponent& agent) {
 }
 
 void SetScript(ScriptComponent& script, std::string path) {
-    std::filesystem::path p(path);
-    std::string ext = p.extension().string();
-
+    std::filesystem::path p = std::filesystem::path(path).lexically_normal();
+    std::string normalizedPath = p.generic_string();
+    std::string ext = p.extension().string(); 
+    
+    for (auto INST: script.Instances) {
+        if (INST.ScriptPath == normalizedPath) {
+            std::cout<<"FILE ALREADY ATTACHED"<<std::endl;
+            return;
+        }
+    }
+    
     ScriptInstance inst;
+
     if (ext == ".py") inst.Type = ScriptType::PYTHON;
     else if (ext == ".cpp") inst.Type = ScriptType::CPP;
     else if (ext == ".lua") inst.Type = ScriptType::LUA;

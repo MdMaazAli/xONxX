@@ -65,7 +65,7 @@ void FileWatcher::WatchLoop() {
     while (m_running) {
         BOOL success =  ReadDirectoryChangesW(
             hDir, buffer, sizeof(buffer), 
-            FALSE, FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_FILE_NAME,  // TYPE OF EVENTS TO LISTEN
+            TRUE, FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_FILE_NAME,  // TYPE OF EVENTS TO LISTEN
             &bytesReturned, // HOW MANY BYTES DID WINDOWS WRITE
             NULL, // OVERLAPPED STRUCT ( SYNCHRNOUS/BLOCKING )
             NULL // COMPLETION ROUTINE ( NOT NULL WHEN ASYNCH/NON BLOCKING ) 
